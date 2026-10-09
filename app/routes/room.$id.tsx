@@ -43,7 +43,8 @@ import { useEffect, useState } from "react";
 import { House, Monitor } from "lucide-react";
 import { NavLinks } from "~/components/nav-links";
 
-const TIME: number = 20 * 60;
+const TIME = 20 * 60;
+const BREAK_TIME = 2 * 60;
 
 function computeTimeLeft(startedAt: number | null): number {
 	return startedAt === null
@@ -99,14 +100,37 @@ export default function RoomPage() {
 	const isInterviewActive = status === "interviewing";
 	const isFinished = status === "idle";
 	const isDialogOpen = isInterviewActive;
-	const isBreakDialogOpen = isBreak;
 	const embedURL =
 		isInterviewActive && data.interviewer && data.interviewer.interviewee
 			? parseEmbedURL(data.interviewer.name, data.interviewer.interviewee)
 			: null;
 
 	const [timeLeft, setTimeLeft] = useState(() => computeTimeLeft(startedAt));
+	const [breakTime, setBreakTime] = useState(0);
+	const [iframeURL, setIframeURL] = useState<string | null>(null);
 	const isTimeout = isInterviewActive && timeLeft <= 0;
+	const isBreakDialogOpen = isBreak;
+
+	// Keep the Google Form mounted; unmounting it can trigger its beforeunload handler.
+	useEffect(() => {
+		if (embedURL) setIframeURL(embedURL);
+	}, [embedURL]);
+
+	// Tick the break countdown while break time remains.
+	useEffect(() => {
+		if (!isBreak) return;
+		const interval = setInterval(() => setBreakTime((prev) => Math.max(prev - 1, 0)), 1000);
+		return () => clearInterval(interval);
+	}, [isBreak]);
+
+	useEffect(() => {
+		if (!isBreak || breakTime > 0 || fetcher.state !== "idle") return;
+
+		const formData = new FormData();
+		formData.append("_action", "reset");
+		fetcher.submit(formData, { method: "post" });
+	}, [isBreak, breakTime, fetcher.state, fetcher.submit]);
+
 
 	// Persist the active session so `/` and `/register` can redirect back here,
 	// and clear it when the interviewer row is gone (e.g. PULANG / 404).
@@ -144,13 +168,6 @@ export default function RoomPage() {
 	}, [isInterviewActive, timeLeft, hasShownAlert]);
 
 	useEffect(() => {
-		const preventReload = (event: BeforeUnloadEvent) => {
-			event.preventDefault();
-			event.returnValue = "";
-		};
-
-		window.addEventListener("beforeunload", preventReload);
-
 		const unsubscribe = subscribeToRoom((message) => {
 			if (message.type === "broadcast") {
 				setBroadcastMessage(message.message);
@@ -158,11 +175,7 @@ export default function RoomPage() {
 			}
 		});
 
-	return () => {
-		window.removeEventListener("beforeunload", preventReload);
-		unsubscribe();
-	};
-
+		return unsubscribe;
 	}, []);
 
 	const handleStartInterview = (e: React.MouseEvent<HTMLButtonElement>) => {
@@ -184,11 +197,13 @@ export default function RoomPage() {
 		fetcher.submit(formData, { method: "post" });
 	};
 
- 	const handleBreak = () => {
- 		if (isInterviewActive) {
- 			setShowActiveInterviewAlert(true);
- 			return;
- 		}
+	const handleBreak = () => {
+		if (isInterviewActive) {
+			setShowActiveInterviewAlert(true);
+			return;
+		}
+
+		if (breakTime === 0) return;
 
 		const formData = new FormData();
 		formData.append("_action", "break");
@@ -202,6 +217,7 @@ export default function RoomPage() {
 	};
 
 	const handleCloseDialog = () => {
+		setBreakTime(BREAK_TIME);
 		const formData = new FormData();
 		formData.append("_action", "reset");
 		fetcher.submit(formData, { method: "post" });
@@ -293,6 +309,7 @@ export default function RoomPage() {
 							variant="default"
 							className="font-bold"
 							type="button"
+							disabled={isInterviewActive || breakTime === 0}
 						>
 							ISTIRAHAT DULS
 						</Button>
@@ -311,8 +328,11 @@ export default function RoomPage() {
 
 			{/* Google Form */}
 			<Dialog open={isDialogOpen} onOpenChange={() => {}}>
-				<DialogContent onPointerDownOutside={(event) => event.preventDefault()}
-					className="max-w-4xl h-[90vh] flex flex-col">
+				<DialogContent
+					forceMount
+					onPointerDownOutside={(event) => event.preventDefault()}
+					className="max-w-4xl h-[90vh] flex flex-col"
+				>
 					<DialogHeader>
 						<div className="flex items-center justify-between">
 							<div>
@@ -342,6 +362,7 @@ export default function RoomPage() {
 									</>
 								)}
 								<Button
+									type="button"
 									onClick={handleCloseDialog}
 									variant="destructive"
 									size="sm"
@@ -354,7 +375,7 @@ export default function RoomPage() {
 					<div className="flex-1 overflow-hidden rounded-md border">
 					<iframe
 						title="Interview form"
-						src={embedURL ?? ""}
+						src={iframeURL ?? ""}
 						className="h-full w-full border-0"
 						loading="lazy"
 					>
@@ -373,12 +394,19 @@ export default function RoomPage() {
 					onKeyUp={(e) => {if (e.code === "Space") e.preventDefault()}}
 				>
 					<DialogHeader className="items-center text-center">
-						<DialogTitle className="text-[1.8rem]">
-							Istirahat Dulu Bolo
-						</DialogTitle>
-						<DialogDescription className="text-center text-lg">
-							Jangan lama-lama yaa😁
-						</DialogDescription>
+						<div className="flex items-start justify-between gap-4 w-full">
+							<div className="flex-1">
+								<DialogTitle className="text-[1.8rem]">
+									Istirahat Duls
+								</DialogTitle>
+								<DialogDescription className="text-lg">
+									Jangan lama-lama yaa😁
+								</DialogDescription>
+							</div>
+							<div className="text-2xl font-bold tabular-nums text-yellow-500">
+								{formatTime(breakTime)}
+							</div>
+						</div>
 					</DialogHeader>
 
 					<Dino />
